@@ -142,23 +142,27 @@ def load_all_records() -> pd.DataFrame:
 
 def normalize_records_df(df_raw: pd.DataFrame) -> pd.DataFrame:
     if df_raw.empty:
-        return pd.DataFrame(columns=["日期", "分类", "明细", "金额"])
+        return pd.DataFrame(columns=["日期", "收支", "分类", "明细", "金额", "_原始金额"])
 
     df = df_raw.copy()
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df = df.dropna(subset=["date"])
     df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
     df = df.dropna(subset=["amount"])
+    df["inout"] = df["amount"].apply(lambda x: "收入" if float(x) < 0 else "支出")
+    df["amount_abs"] = df["amount"].abs()
     df = df.rename(
         columns={
             "date": "日期",
+            "inout": "收支",
             "category": "分类",
             "description": "明细",
-            "amount": "金额",
+            "amount_abs": "金额",
+            "amount": "_原始金额",
         }
     )
     df["日期"] = df["日期"].dt.strftime("%Y-%m-%d")
-    return df[["日期", "分类", "明细", "金额"]]
+    return df[["日期", "收支", "分类", "明细", "金额", "_原始金额"]]
 
 
 def filter_date_range(df: pd.DataFrame, start_date: date, end_date: date) -> pd.DataFrame:
@@ -181,6 +185,24 @@ def style_amount(val: object) -> str:
     return "background-color: #ecfdf5; color: #166534;"
 
 
+def style_inout(val: object) -> str:
+    v = str(val or "").strip()
+    if v == "收入":
+        return "background-color: #ecfdf5; color: #166534; font-weight: 700;"
+    if v == "支出":
+        return "background-color: #fff1f2; color: #9f1239; font-weight: 700;"
+    return ""
+
+
+def summarize_inout_totals(df: pd.DataFrame) -> Tuple[float, float]:
+    if df.empty:
+        return 0.0, 0.0
+    raw = pd.to_numeric(df["_原始金额"], errors="coerce").fillna(0.0)
+    expense = float(raw[raw >= 0].sum())
+    income = float((-raw[raw < 0]).sum())
+    return income, expense
+
+
 def summarize_totals(df: pd.DataFrame) -> Tuple[float, float, float]:
     today = date.today()
     week_start = today - timedelta(days=today.weekday())
@@ -191,15 +213,15 @@ def summarize_totals(df: pd.DataFrame) -> Tuple[float, float, float]:
     df_month = filter_date_range(df, month_start, today)
     df_year = filter_date_range(df, year_start, today)
     return (
-        float(df_week["金额"].sum()) if not df_week.empty else 0.0,
-        float(df_month["金额"].sum()) if not df_month.empty else 0.0,
-        float(df_year["金额"].sum()) if not df_year.empty else 0.0,
+        float(pd.to_numeric(df_week["_原始金额"], errors="coerce").fillna(0.0).sum()) if not df_week.empty else 0.0,
+        float(pd.to_numeric(df_month["_原始金额"], errors="coerce").fillna(0.0).sum()) if not df_month.empty else 0.0,
+        float(pd.to_numeric(df_year["_原始金额"], errors="coerce").fillna(0.0).sum()) if not df_year.empty else 0.0,
     )
 
 
 def aggregate_by_period(df: pd.DataFrame, period_mode: str) -> pd.DataFrame:
     if df.empty:
-        return pd.DataFrame(columns=["周期", "总金额"])
+        return pd.DataFrame(columns=["周期", "支出", "收入", "净额"])
     d = pd.to_datetime(df["日期"], errors="coerce")
     if period_mode == "按周":
         key = d.dt.strftime("%G-W%V")
@@ -207,13 +229,12 @@ def aggregate_by_period(df: pd.DataFrame, period_mode: str) -> pd.DataFrame:
         key = d.dt.strftime("%Y-%m")
     else:
         key = d.dt.strftime("%Y")
-    out = (
-        pd.DataFrame({"周期": key, "金额": df["金额"]})
-        .groupby("周期", as_index=False)["金额"]
-        .sum()
-        .rename(columns={"金额": "总金额"})
-        .sort_values("周期", ascending=False)
-    )
+    raw = pd.to_numeric(df["_原始金额"], errors="coerce").fillna(0.0)
+    exp = raw.where(raw >= 0, 0.0)
+    inc = (-raw.where(raw < 0, 0.0))
+    tmp = pd.DataFrame({"周期": key, "支出": exp, "收入": inc})
+    out = tmp.groupby("周期", as_index=False)[["支出", "收入"]].sum().sort_values("周期", ascending=False)
+    out["净额"] = out["收入"] - out["支出"]
     return out
 
 
@@ -223,11 +244,12 @@ st.title("📓 日常开支")
 st.caption("数据源：" + ("Supabase 云端数据库" if using_supabase() else "本地 SQLite"))
 
 with st.container():
-    st.subheader("一笔新开支")
+    st.subheader("新增一笔记录")
     with st.form("add_record_form", clear_on_submit=True):
         col1, col2 = st.columns(2)
         with col1:
             date_input = st.date_input("日期", datetime.today())
+            inout_input = st.selectbox("收支", ["支出", "收入"])
             category_input = st.selectbox("分类", CATEGORIES)
         with col2:
             amount_input = st.number_input("金额 (元)", min_value=0.01, format="%.2f")
@@ -236,12 +258,13 @@ with st.container():
         submitted = st.form_submit_button("保存记录", width="stretch")
         if submitted:
             try:
+                signed_amount = float(amount_input) * (-1.0 if inout_input == "收入" else 1.0)
                 save_record(
                     {
                         "date": date_input.strftime("%Y-%m-%d"),
                         "category": category_input,
                         "description": (desc_input or "").strip(),
-                        "amount": float(amount_input),
+                        "amount": signed_amount,
                     }
                 )
                 st.success("记录成功！")
@@ -255,16 +278,30 @@ df_all = normalize_records_df(load_all_records())
 if df_all.empty:
     st.info("暂无记录。你可以先新增一笔开支。")
 else:
-    week_total, month_total, year_total = summarize_totals(df_all)
+    today = date.today()
+    week_start = today - timedelta(days=today.weekday())
+    month_start = today.replace(day=1)
+    year_start = today.replace(month=1, day=1)
+
+    df_week = filter_date_range(df_all, week_start, today)
+    df_month = filter_date_range(df_all, month_start, today)
+    df_year = filter_date_range(df_all, year_start, today)
+
+    week_net, month_net, year_net = summarize_totals(df_all)
+    week_income, week_expense = summarize_inout_totals(df_week)
+    month_income, month_expense = summarize_inout_totals(df_month)
+    year_income, year_expense = summarize_inout_totals(df_year)
+
     c1, c2, c3 = st.columns(3)
-    c1.metric("本周总支出", f"¥ {week_total:.2f}")
-    c2.metric("本月总支出", f"¥ {month_total:.2f}")
-    c3.metric("本年总支出", f"¥ {year_total:.2f}")
+    c1.metric("本周 支出 / 收入", f"¥ {week_expense:.2f} / ¥ {week_income:.2f}")
+    c2.metric("本月 支出 / 收入", f"¥ {month_expense:.2f} / ¥ {month_income:.2f}")
+    c3.metric("本年 支出 / 收入", f"¥ {year_expense:.2f} / ¥ {year_income:.2f}")
+    st.caption(f"净额（收入-支出）：本周 ¥ {week_net:.2f}｜本月 ¥ {month_net:.2f}｜本年 ¥ {year_net:.2f}")
 
     st.markdown("### 按周 / 月 / 年汇总")
     period_mode = st.selectbox("汇总维度", ["按周", "按月", "按年"], index=1)
     df_period = aggregate_by_period(df_all, period_mode)
-    st.bar_chart(df_period.head(24), x="周期", y="总金额")
+    st.bar_chart(df_period.head(24), x="周期", y=["支出", "收入"])
     st.dataframe(df_period, width="stretch", hide_index=True)
 
     st.markdown("### 全部记录（可筛选）")
@@ -292,9 +329,14 @@ else:
 
     df_display = df_display.sort_values("日期", ascending=False)
     styled = df_display.style.format({"金额": "¥ {:.2f}"})
+    if "收支" in df_display.columns:
+        if hasattr(styled, "map"):
+            styled = styled.map(style_inout, subset=["收支"])
+        else:
+            styled = styled.applymap(style_inout, subset=["收支"])
     if hasattr(styled, "map"):
         styled = styled.map(style_amount, subset=["金额"])
     else:
         styled = styled.applymap(style_amount, subset=["金额"])
     st.caption(f"共 {len(df_display)} 条记录")
-    st.dataframe(styled, width="stretch", hide_index=True)
+    st.dataframe(styled, width="stretch", hide_index=True, column_config={"_原始金额": None})
