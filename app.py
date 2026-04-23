@@ -5,6 +5,7 @@ from typing import Dict, List, Tuple
 import pandas as pd
 import requests
 import streamlit as st
+import altair as alt
 
 
 DB_PATH = "expenses.db"
@@ -292,20 +293,51 @@ else:
     month_income, month_expense = summarize_inout_totals(df_month)
     year_income, year_expense = summarize_inout_totals(df_year)
 
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("本周支出", f"¥ {week_expense:.2f}")
-    c2.metric("本周收入", f"¥ {week_income:.2f}")
-    c3.metric("本月支出", f"¥ {month_expense:.2f}")
-    c4.metric("本月收入", f"¥ {month_income:.2f}")
-    c5.metric("本年支出", f"¥ {year_expense:.2f}")
-    c6.metric("本年收入", f"¥ {year_income:.2f}")
+    # 6 列在窄屏/云端容器里容易把数值截断成 “¥ ...”，改成 3 列纵向展示更稳
+    p1, p2, p3 = st.columns(3)
+    with p1:
+        st.metric("本周支出", f"¥ {week_expense:.2f}")
+        st.metric("本周收入", f"¥ {week_income:.2f}")
+    with p2:
+        st.metric("本月支出", f"¥ {month_expense:.2f}")
+        st.metric("本月收入", f"¥ {month_income:.2f}")
+    with p3:
+        st.metric("本年支出", f"¥ {year_expense:.2f}")
+        st.metric("本年收入", f"¥ {year_income:.2f}")
     st.caption(f"净额（收入-支出）：本周 ¥ {week_net:.2f}｜本月 ¥ {month_net:.2f}｜本年 ¥ {year_net:.2f}")
+
+    with st.expander("诊断：收支识别与数据分布", expanded=False):
+        st.write(
+            {
+                "总记录数": int(len(df_all)),
+                "收入条数": int((df_all["收支"] == "收入").sum()) if "收支" in df_all.columns else 0,
+                "支出条数": int((df_all["收支"] == "支出").sum()) if "收支" in df_all.columns else 0,
+                "原始金额最小值": float(pd.to_numeric(df_all["_原始金额"], errors="coerce").min())
+                if "_原始金额" in df_all.columns and not df_all.empty
+                else None,
+                "原始金额最大值": float(pd.to_numeric(df_all["_原始金额"], errors="coerce").max())
+                if "_原始金额" in df_all.columns and not df_all.empty
+                else None,
+            }
+        )
 
     st.markdown("### 按周 / 月 / 年汇总")
     period_mode = st.selectbox("汇总维度", ["按周", "按月", "按年"], index=1)
     df_period = aggregate_by_period(df_all, period_mode)
-    df_chart = df_period.head(24).set_index("周期")[["支出", "收入"]]
-    st.bar_chart(df_chart)
+    df_chart = df_period.head(24).copy()
+    df_long = df_chart.melt(id_vars=["周期"], value_vars=["支出", "收入"], var_name="类型", value_name="金额")
+    chart = (
+        alt.Chart(df_long)
+        .mark_bar()
+        .encode(
+            x=alt.X("周期:N", sort=None, axis=alt.Axis(labelAngle=-60)),
+            y=alt.Y("金额:Q"),
+            color=alt.Color("类型:N", scale=alt.Scale(domain=["支出", "收入"], range=["#1f77b4", "#2ca02c"])),
+            tooltip=["周期:N", "类型:N", alt.Tooltip("金额:Q", format=",.2f")],
+        )
+        .properties(height=260)
+    )
+    st.altair_chart(chart, use_container_width=True)
     st.dataframe(df_period, width="stretch", hide_index=True)
 
     st.markdown("### 全部记录（可筛选）")
