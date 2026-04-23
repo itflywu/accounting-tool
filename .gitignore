@@ -1,0 +1,17 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Local virtual env
+.venv/
+venv/
+
+# Local editor/system files
+.DS_Store
+Thumbs.db
+
+# Streamlit runtime cache
+.streamlit/secrets.toml
+
+# Local database (optional: remove this line if you want to version DB)
+expenses.db
