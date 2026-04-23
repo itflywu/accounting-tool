@@ -291,6 +291,10 @@ else:
         df_display = df_display[df_display["明细"].astype(str).str.contains(search_text.strip(), case=False, na=False)]
 
     df_display = df_display.sort_values("日期", ascending=False)
-    styled = df_display.style.format({"金额": "¥ {:.2f}"}).applymap(style_amount, subset=["金额"])
+    styled = df_display.style.format({"金额": "¥ {:.2f}"})
+    if hasattr(styled, "map"):
+        styled = styled.map(style_amount, subset=["金额"])
+    else:
+        styled = styled.applymap(style_amount, subset=["金额"])
     st.caption(f"共 {len(df_display)} 条记录")
     st.dataframe(styled, width="stretch", hide_index=True)
