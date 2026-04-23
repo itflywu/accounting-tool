@@ -292,16 +292,20 @@ else:
     month_income, month_expense = summarize_inout_totals(df_month)
     year_income, year_expense = summarize_inout_totals(df_year)
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("本周 支出 / 收入", f"¥ {week_expense:.2f} / ¥ {week_income:.2f}")
-    c2.metric("本月 支出 / 收入", f"¥ {month_expense:.2f} / ¥ {month_income:.2f}")
-    c3.metric("本年 支出 / 收入", f"¥ {year_expense:.2f} / ¥ {year_income:.2f}")
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric("本周支出", f"¥ {week_expense:.2f}")
+    c2.metric("本周收入", f"¥ {week_income:.2f}")
+    c3.metric("本月支出", f"¥ {month_expense:.2f}")
+    c4.metric("本月收入", f"¥ {month_income:.2f}")
+    c5.metric("本年支出", f"¥ {year_expense:.2f}")
+    c6.metric("本年收入", f"¥ {year_income:.2f}")
     st.caption(f"净额（收入-支出）：本周 ¥ {week_net:.2f}｜本月 ¥ {month_net:.2f}｜本年 ¥ {year_net:.2f}")
 
     st.markdown("### 按周 / 月 / 年汇总")
     period_mode = st.selectbox("汇总维度", ["按周", "按月", "按年"], index=1)
     df_period = aggregate_by_period(df_all, period_mode)
-    st.bar_chart(df_period.head(24), x="周期", y=["支出", "收入"])
+    df_chart = df_period.head(24).set_index("周期")[["支出", "收入"]]
+    st.bar_chart(df_chart)
     st.dataframe(df_period, width="stretch", hide_index=True)
 
     st.markdown("### 全部记录（可筛选）")
